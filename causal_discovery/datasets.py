@@ -1,7 +1,11 @@
+import sys
 import torch
 import torch.utils.data as data
 import numpy as np
 import time
+sys.path.append("../")
+
+from causal_graphs.variable_distributions import ContinuousProbDist
 
 
 class ObservationalCategoricalData(data.Dataset):
@@ -102,8 +106,11 @@ class InterventionalDataset(object):
             intervention_list = []
             for var_idx in range(self.graph.num_vars):
                 var = self.graph.variables[var_idx]
-                values = np.random.randint(var.prob_dist.num_categs,
-                                           size=(dataset_size,))  # Uniform interventional distribution
+                if isinstance(var.prob_dist, ContinuousProbDist):
+                    values = np.random.normal(0, 1., size=(dataset_size,)) * np.random.uniform(0.5, 2.0) + np.random.uniform(1, 5) * np.random.choice([-1., 1.], p=[0.5, 0.5])
+                else:
+                    values = np.random.randint(var.prob_dist.num_categs,
+                                            size=(dataset_size,))  # Uniform interventional distribution
                 intervention_list.append((var_idx, var, values))
                 if len(intervention_list) >= num_stacks:
                     self._add_vars(intervention_list)
@@ -119,7 +126,7 @@ class InterventionalDataset(object):
         num_vars = len(intervention_list)
         intervention_dict = {}
         for i, (var_idx, var, values) in enumerate(intervention_list):
-            v_array = -np.ones((num_vars, self.dataset_size), dtype=np.int32)
+            v_array = -np.ones((num_vars, self.dataset_size), dtype=values.dtype)
             v_array[i] = values
             v_array = np.reshape(v_array, (-1,))
             intervention_dict[var.name] = v_array

@@ -14,7 +14,7 @@ import sys
 sys.path.append("../")
 
 from causal_graphs.graph_definition import CausalDAG, CausalVariable
-from causal_graphs.variable_distributions import get_random_categorical
+from causal_graphs.variable_distributions import get_random_categorical, get_random_continuous
 from causal_graphs.graph_utils import edges_to_adj_matrix
 
 
@@ -413,5 +413,63 @@ def generate_categorical_graph(num_vars,
                                       use_nn=use_nn,
                                       deterministic=deterministic)
         return dist
+
+    return graph_func(variable_names, dist_func, **kwargs)
+
+
+def generate_continous_graph(
+        num_vars, 
+        is_add_noise=False,
+        nn_size='small',
+        base_dist="normal",
+        graph_func=generate_random_graph,
+        seed=-1,
+        **kwargs
+    ):
+    """
+    Summarizes the whole generation process for a graph with categorical variables. Returns a CausalDAG object.
+
+    Parameters
+    ----------
+    num_vars : int
+               Number of variables to have in the graph.
+    is_add_noise : bool
+                If True, use additive noise model. Default is False.
+    nn_size : str
+                Size of the neural network used to model the conditional distribution. Can be one of 'small', 'medium', 'large'.
+    graph_func : function
+                 One of the functions for generating the graph structure. Can be obtained from 'get_graph_func'.
+    seed : int
+           Seed to set for reproducible graph generation.
+    kwargs : dict
+             Any other argument that should be passed to the graph structure generating function.
+    """
+    if seed >= 0:
+        np.random.seed(seed)
+        random.seed(seed)
+        torch.manual_seed(seed)
+
+    if num_vars <= 26:  # For less than 26 variables, we call the variables alphabetically, otherwise numerically
+        variable_names = [n for i, n in zip(range(1, num_vars+1), string.ascii_uppercase)]
+    else:
+        variable_names = [r"$X_{%s}$" % i for i in range(1, num_vars+1)]
+    
+    nn_kwargs = {
+        'small': {'hidden_dim': 64, 'num_layers': 2},
+        'medium': {'hidden_dim': 128, 'num_layers': 5},
+        'large': {'hidden_dim': 256, 'num_layers': 10}
+    }
+
+    assert nn_size in nn_kwargs.keys(), f"Invalid nn_size: {nn_size} should be one of {list(nn_kwargs.keys())}"
+
+    def dist_func(input_names, name):
+
+        return get_random_continuous(
+            input_names=input_names,
+            is_add_noise=is_add_noise,
+            base_dist=base_dist,
+            **nn_kwargs[nn_size]
+        )
+        
 
     return graph_func(variable_names, dist_func, **kwargs)

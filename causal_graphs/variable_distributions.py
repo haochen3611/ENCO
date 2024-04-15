@@ -339,11 +339,208 @@ def multinomial_batch(p):
 
 class ContinuousProbDist(ProbDist):
 
-    def __init__(self):
+    def __init__(self, mechanism=None, base_dist=None):
         """
         Template class for continuous probability distributions.
         """
         super().__init__()
+
+        if base_dist is None:
+            base_dist = torch.distributions.Normal(loc=0.0, scale=1.0)
+        self.base_dist = base_dist
+
+        self.mechanism = mechanism
+
+    
+    def sample(self, inputs, batch_size=1):
+
+        noise = self.base_dist.sample((batch_size, ))
+
+        # if len(inputs.shape) == 1:
+        #     inputs = np.repeat(inputs[None, ...], batch_size, axis=0)
+        # else:
+        #     if inputs.shape[0] == 1:
+        #         inputs = np.repeat(inputs, batch_size, axis=0)
+        #     else:
+        #         raise ValueError("Inputs should match batch_size or be a single input vector.")
+        if self.mechanism is None:
+            return noise.cpu().numpy()
+        else:
+            return self.mechanism(inputs, noise)
+
+    def get_state_dict(self):
+        # Export distribution including prob_func details.
+        state_dict = {}
+        if self.mechanism is not None:
+            state_dict["mechanism"] = self.mechanism.get_state_dict()
+            state_dict["mechanism"]["class_name"] = str(self.mechanism.__class__.__name__)
+        
+        if self.base_dist is not None:
+            state_dict["base_dist"] = self.base_dist.state_dict()
+            state_dict["base_dist"]["class_name"] = str(self.base_dist.__class__.__name__)
+        else:
+            state_dict["base_dist"] = None
+        
+        return state_dict
+
+    @classmethod
+    def load_from_state_dict(cls, state_dict):
+        mechanism_class = None
+        if "mechanism" in state_dict:
+            mechanism_class = eval(state_dict["mechanism"].pop("class_name", 'None'))
+        if mechanism_class is not None:
+            mechanism = mechanism_class.load_from_state_dict(state_dict["mechanism"])
+        else:
+            mechanism = None
+        obj = cls(mechanism, state_dict["base_dist"])
+        return obj
+
+
+class BaseNNMechanism(object):
+
+    def __init__(self, input_names, hidden_dim=64, num_layers=1):
+        self.input_names = input_names
+        self.input_dim = len(input_names)
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+
+        self.net = self._setup_network()
+
+        self.device = get_device()
+        self.net.to(self.device)
+    
+    def _setup_network(self):
+        raise NotImplementedError
+    
+    @torch.no_grad()
+    def __call__(self, *args, **kwargs):
+        raise NotImplementedError
+    
+    def get_state_dict(self):
+        state_dict = copy(vars(self))
+        state_dict["net"] = self.net.state_dict()
+        return state_dict
+
+    @classmethod
+    def load_from_state_dict(cls, state_dict):
+        obj = cls(state_dict["inpu_dim"], state_dict["hidden_dim"], state_dict["num_layers"])
+        obj.net.load_state_dict(state_dict["net"])
+        return obj
+
+
+class NNAdditive(BaseNNMechanism):
+    """Additive noise mechanism with a neural network."""
+
+    def __init__(self, input_names, hidden_dim=64, num_layers=1):
+
+        super().__init__(input_names, hidden_dim, num_layers)
+
+    def _setup_network(self):
+
+        input_layer = nn.Linear(self.input_dim, self.hidden_dim)
+
+        output_layer = nn.Linear(self.hidden_dim, 1)
+
+        layers = [input_layer] + [
+            ResidualBlock(self.hidden_dim, self.hidden_dim) for _ in range(self.num_layers) for _ in range(self.num_layers)
+        ] + [output_layer]
+
+        net = nn.Sequential(*layers)
+
+        for name, p in net.named_parameters():
+            if name.endswith(".bias"):
+                p.data.uniform_(-0.5, 0.5)
+            else:
+                nn.init.orthogonal_(p, gain=1.)
+        return net
+    
+    @torch.no_grad()
+    def __call__(self, inputs, noise):
+        c = None
+        for n in self.input_names:
+            v = torch.from_numpy(inputs[n]).to(device=self.device, dtype=torch.float).unsqueeze(-1)
+            c = v if c is None else torch.cat([c, v], dim=-1)
+        inputs = c
+        noise = torch.as_tensor(noise, device=self.device, dtype=torch.float).unsqueeze(-1)
+        if inputs is not None:
+            output = (self.net(inputs) + noise).cpu().numpy()
+        else:
+            output = noise.cpu().numpy()
+
+        if output.ndim > 1:
+            output = output.squeeze(-1)
+        return output
+
+
+class NNResidual(BaseNNMechanism):
+    """General NN mechanism with residual connections.
+    
+    Residual connections are added to the network to ensure the noise input is not completely ignored.
+
+    Parameters
+    ----------
+    input_names : list[str]
+                    List of variable names that are supposed to be the parents in this conditional distribution.
+    hidden_dim : int
+                    Dimension of the hidden layers in the network.
+    num_layers : int
+                    Number of residual blocks to use in the network.
+    """
+
+    def __init__(self, input_names, hidden_dim=64, num_layers=1):
+        super().__init__(input_names, hidden_dim, num_layers)
+
+        self.device = get_device()
+        self.net.to(self.device)
+
+    def _setup_network(self):
+
+        input_layer = nn.Linear(self.input_dim+1, self.hidden_dim)
+
+        output_layer = nn.Linear(self.hidden_dim, 1)
+
+        layers = [input_layer] + [
+            ResidualBlock(self.hidden_dim, self.hidden_dim) for _ in range(self.num_layers)
+        ] + [output_layer]
+
+        net = nn.Sequential(*layers)
+
+        for name, p in net.named_parameters():
+            if name.endswith(".bias"):
+                p.data.uniform_(-0.5, 0.5)
+            else:
+                nn.init.orthogonal_(p, gain=1.5)
+        return net
+
+    @torch.no_grad()
+    def __call__(self, inputs, noise):
+        c = None
+        for n in self.input_names:
+            v = torch.from_numpy(inputs[n]).to(device=self.device, dtype=torch.float).unsqueeze(-1)
+            c = v if c is None else torch.cat([c, v], dim=-1)
+        inputs = c
+        noise = torch.as_tensor(noise, device=self.device, dtype=torch.float).unsqueeze(-1)
+        x = torch.cat([inputs, noise], dim=-1) if inputs is not None else noise
+        output = self.net(x).cpu().numpy()
+        if output.ndim > 1:
+            output = output.squeeze(-1)
+        return output
+
+
+class ResidualBlock(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim):
+
+        super(ResidualBlock, self).__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LeakyReLU(0.1),
+            nn.Linear(hidden_dim, input_dim)
+        )
+
+    def forward(self, x):
+        return x + self.net(x)
 
 
 #####################
@@ -410,3 +607,23 @@ def get_random_categorical(input_names, input_num_categs, num_categs, inputs_ind
         prob_func = CategProduct(input_names, input_num_categs, num_categs)
 
     return CategoricalDist(num_categs, prob_func, **kwargs)
+
+
+
+def get_random_continuous(input_names, base_dist, is_add_noise=False, **kwargs):
+
+    if is_add_noise:
+        mechanism = NNAdditive(input_names, **kwargs)
+    else:
+        mechanism = NNResidual(input_names, **kwargs)
+
+    if base_dist == 'uniform':
+        base = torch.distributions.Uniform(low=0., high=1.0)
+    elif base_dist == 'normal':
+        base = torch.distributions.Normal(loc=0.0, scale=1.0)
+    else:
+        base = None
+
+    return ContinuousProbDist(mechanism=mechanism, base_dist=base)
+
+

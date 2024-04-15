@@ -146,7 +146,7 @@ class SigmoidFlow(BaseFlow):
 
 class DeepSigmoidalFlowModel(nn.Module):
     
-    def __init__(self, num_vars, hidden_dims, flow_n_layers=1, flow_hid_dim=16):
+    def __init__(self, num_vars, hidden_dims, flow_n_layers=5, flow_hid_dim=16):
         """
         Deep Sigmoidal Flow model
 

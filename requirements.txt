@@ -1,0 +1,9 @@
+numpy
+matplotlib
+networkx
+pydot
+tqdm
+notebook
+ipywidgets
+pip
+gdown
