@@ -20,7 +20,7 @@ def edges_to_adj_matrix(edges, num_vars):
     """
     if not isinstance(edges, np.ndarray):
         edges = np.array(edges)
-    adj_matrix = np.zeros((num_vars, num_vars), dtype=np.bool)
+    adj_matrix = np.zeros((num_vars, num_vars), dtype=bool)
     if edges.shape[0] > 0:
         adj_matrix[edges[:, 0], edges[:, 1]] = True
     return adj_matrix
@@ -89,7 +89,7 @@ def get_node_relations(adj_matrix):
 
     Parameters
     ----------
-    adj_matrix : np.ndarray, shape [num_vars, num_vars], type np.bool
+    adj_matrix : np.ndarray, shape [num_vars, num_vars], type bool
                  The adjacency matrix of the graph.
 
     Returns

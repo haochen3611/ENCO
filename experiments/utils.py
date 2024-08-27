@@ -172,11 +172,11 @@ def test_graph(graph, args, checkpoint_dir, file_id):
     # Save predicted binary matrix
     binary_matrix = discovery_module.get_binary_adjmatrix().detach().cpu().numpy()
     np.save(os.path.join(checkpoint_dir, 'binary_matrix_%s.npy' % file_id),
-            binary_matrix.astype(np.bool))
+            binary_matrix.astype(bool))
     if graph.num_vars < 100:
         acyclic_matrix = discovery_module.get_acyclic_adjmatrix().detach().numpy()
         np.save(os.path.join(checkpoint_dir, 'binary_acyclic_matrix_%s.npy' % file_id),
-                acyclic_matrix.astype(np.bool))
+                acyclic_matrix.astype(bool))
 
     # Visualize predicted graphs. For large graphs, visualizing them do not really help
     if graph.num_vars < 40:
