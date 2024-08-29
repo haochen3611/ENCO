@@ -73,8 +73,9 @@ class DistributionFittingNS(object):
         Samples a batch of adjacency matrices that are used for masking the inputs.
         """
         sampled_perm = self.gumbel_softmax(n_samples=batch_size, scores=gamma, tau=tau, beta=beta)
-        lower_triangluar = torch.tril(sampled_perm.size(-1), 0).unsqueeze(0).expand(sampled_perm.size(0), -1, -1)
-        adj_matrices = torch.enisum("bij,bjk->bik", sampled_perm, lower_triangluar)
+        ones_tril = torch.ones(sampled_perm.size(-1), sampled_perm.size(-1), device=sampled_perm.device, dtype=sampled_perm.dtype)
+        ones_tril = torch.tril(ones_tril, 0).unsqueeze(0).expand(sampled_perm.size(0), -1, -1)
+        adj_matrices = torch.einsum("bij,bjk->bik", sampled_perm, ones_tril)
         # Mask diagonals
         return adj_matrices
 
@@ -135,13 +136,13 @@ class DistributionFittingNS(object):
         
         n_batch = scores.size(0)
         n_dim = scores.size(1)
-        ones = torch.ones(n_batch, n_dim, 1, dtype=torch.float, device=scores.device)
+        ones = torch.ones(n_dim, 1, dtype=torch.float, device=scores.device)
 
         A_scores = torch.abs(scores - scores.permute(0, 2, 1))
 
         B = torch.matmul(A_scores, torch.matmul(ones, torch.transpose(ones, 0, 1)))
 
-        scaling = torch.matmul(n_dim + 1 - 2 * (torch.arange(n_dim) + 1)).float()
+        scaling = (n_dim + 1 - 2 * (torch.arange(n_dim) + 1)).float().to(scores.device)
 
         C = torch.matmul(scores, scaling.unsqueeze(0))
 

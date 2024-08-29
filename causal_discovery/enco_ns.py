@@ -144,13 +144,13 @@ class ENCONS(object):
         )
         # Initialize graph parameters
         self.init_graph_params(
-            self.num_vars, lr_gamma, betas_gamma, lr_theta, betas_theta
+            self.num_vars,
+            lr_gamma,
+            betas_gamma,
         )
         # Initialize distribution and graph fitting modules
         self.distribution_fitting_module = DistributionFittingNS(
-            model=model, 
-            optimizer=model_optimizer, 
-            data_loader=obs_data_loader
+            model=model, optimizer=model_optimizer, data_loader=obs_data_loader
         )
         self.graph_fitting_module = NeuralSorting(
             model=model,
@@ -196,8 +196,11 @@ class ENCONS(object):
         # self.theta_optimizer = AdamTheta(self.theta, lr=lr_theta, beta1=betas_theta[0], beta2=betas_theta[1])
 
         self.gamma = nn.Parameter(torch.ones(num_vars))  # Init with zero => prob 0.5
-        self.gamma_optimizer = AdamGamma(
-            [self.gamma], lr=lr_gamma, beta1=betas_gamma[0], beta2=betas_gamma[1]
+        # self.gamma_optimizer = AdamGamma(
+        #     self.gamma, lr=lr_gamma, beta1=betas_gamma[0], beta2=betas_gamma[1]
+        # )
+        self.gamma_optimizer = torch.optim.Adam(
+            [self.gamma], lr=lr_gamma, betas=betas_gamma, maximize=True
         )
 
     def discover_graph(self, num_epochs=30, stop_early=False):
@@ -216,7 +219,8 @@ class ENCONS(object):
             self.graph_fitting_step()
             self.iter_time = time.time() - start_time
             # Print stats
-            self.print_graph_statistics(epoch=epoch + 1, log_metrics=True)
+            # self.print_graph_statistics(epoch=epoch + 1, log_metrics=True)
+            self.print_predicted_ordering()
             # Early stopping if perfect reconstruction for 5 epochs (for faster prototyping)
             if stop_early and self.is_prediction_correct():
                 num_stops += 1
@@ -225,7 +229,7 @@ class ENCONS(object):
                     break
             else:
                 num_stops = 0
-        return self.get_binary_adjmatrix()
+        return None
 
     def distribution_fitting_step(self):
         """
@@ -248,7 +252,7 @@ class ENCONS(object):
         Performs on iteration of graph fitting.
         """
         # For large graphs, freeze gamma in every second graph fitting stage
-        t =  track(range(self.graph_iters), leave=False, desc="Graph fitting loop")
+        t = track(range(self.graph_iters), leave=False, desc="Graph fitting loop")
         # Update gamma and theta in a loop
         for _ in t:
             self.gamma_optimizer.zero_grad()
@@ -258,15 +262,26 @@ class ENCONS(object):
                 tau=tau,
                 beta=beta,
             )
-            self.gamma_optimizer.step(var_idx)
+            self.gamma_optimizer.step()
+            if torch.min(self.gamma.data) < 0.1:
+                self.gamma.data += 1.
+
             if hasattr(t, "set_description"):
                 t.set_description("Graph update loop, loss: %4.2f" % loss)
 
-    def get_predicted_ordering(self):
+    def print_predicted_ordering(self):
         """
         Returns the predicted ordering of the variables.
         """
-        return torch.argsort(self.gamma.data, descending=True)
+        predicted_scores = self.gamma.data.cpu()
+        predicted_order = self.get_predicted_order()
+        order_div = self.get_order_divergence()
+
+        print(
+            f"\nOrder divergence: {order_div}\n"
+            f"Predicted ordering:\n {predicted_order}\n"
+            f"Predicted scores:\n {predicted_scores}"
+        )
 
     def get_binary_adjmatrix(self):
         """
@@ -288,13 +303,29 @@ class ENCONS(object):
         Returns true if the prediction corresponds to the correct, underlying causal graph. Otherwise false.
         If latent confounders exist, those need to be correct as well to return true.
         """
-        correct_pred = (self.get_binary_adjmatrix() == self.true_adj_matrix).all()
-        if self.graph.num_latents > 0:
-            conf_metrics = self.get_confounder_metrics()
-            correct_pred = correct_pred and (
-                (conf_metrics["FP"] + conf_metrics["FN"]) == 0
-            )
-        return correct_pred
+        # correct_pred = (self.get_binary_adjmatrix() == self.true_adj_matrix).all()
+        # if self.graph.num_latents > 0:
+        #     conf_metrics = self.get_confounder_metrics()
+        #     correct_pred = correct_pred and (
+        #         (conf_metrics["FP"] + conf_metrics["FN"]) == 0
+        #     )
+        # return correct_pred
+        raise NotImplementedError("This method is not implemented yet.")
+    
+    def get_order_divergence(self):
+
+        predicted_order = self.get_predicted_order()
+        ones = torch.ones(predicted_order.shape[0], predicted_order.shape[0])
+        lower_tri = torch.tril(ones, diagonal=0)
+        upper_tri = torch.triu(ones, diagonal=1)
+        ordered_lower_tri = lower_tri[predicted_order]
+        order_div = torch.sum(ordered_lower_tri * upper_tri)
+
+        return order_div
+    
+    def get_predicted_order(self):
+
+        return torch.argsort(self.gamma.data, descending=True).cpu().detach().int()
 
     def get_confounder_scores(self):
         """

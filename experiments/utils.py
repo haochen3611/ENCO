@@ -92,7 +92,7 @@ def get_basic_parser():
     parser.add_argument(
         "--lr_gamma",
         type=float,
-        default=2e-2,
+        default=1e-3,
         help="Learning rate of gamma parameters in graph fitting.",
     )
     parser.add_argument(

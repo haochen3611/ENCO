@@ -113,25 +113,23 @@ class NeuralSorting(object):
 
         gamma.requires_grad_(True)
 
-        sampled_order, log_likelihoods, var_idx = self.get_monte_carlo_samples(
+        sampled_orders, total_nll, var_idx = self.get_monte_carlo_samples(
             gamma, self.num_batches, self.num_graphs, self.batch_size, var_idx
         )
 
-        # Determine gradients for gamma and theta
-        gamma_grad = self.gradient_estimator(
-            sampled_order, log_likelihoods, gamma, var_idx)
-        
-        log_likelihoods = log_likelihoods.detach()
-        log_likelihoods[var_idx] = 0.
-        loss = -log_likelihoods.sum()
+        # Determine gradients for gamma
+        self.gradient_estimator(
+            sampled_orders, total_nll, gamma, var_idx
+        )
 
-        return loss, var_idx
+        return total_nll, var_idx
 
     def get_monte_carlo_samples(
         self, gamma, num_batches, num_graphs, batch_size, var_idx=-1
     ):
 
         device = self.get_device()
+        assert torch.isnan(gamma).sum() == 0, "NaNs in gamma parameters!"
 
         # Sample data batch
         if hasattr(self, "dataset"):
@@ -165,15 +163,21 @@ class NeuralSorting(object):
         sampled_perm = self.gumbel_softmax(
             num_graphs, gamma, tau=self.tau, beta=self.beta
         )
-        lower_triangluar = (
-            torch.tril(sampled_perm.size(-1), 0)
-            .unsqueeze(0)
-            .expand(sampled_perm.size(0), -1, -1)
+        assert torch.isnan(sampled_perm).sum() == 0, "NaNs in sampled permutations!"
+
+        ones_tril = torch.ones(
+            sampled_perm.size(-1),
+            sampled_perm.size(-1),
+            device=sampled_perm.device,
+            dtype=sampled_perm.dtype,
         )
-        adj_matrix = torch.enisum("bij,bjk->bik", sampled_perm, lower_triangluar)
+        ones_tril = (
+            torch.tril(ones_tril, 0).unsqueeze(0).expand(sampled_perm.size(0), -1, -1)
+        )
+        adj_matrix = torch.einsum("bij,bjk->bik", sampled_perm, ones_tril)
 
         # Evaluate log-likelihoods under sampled adjacency matrix and data
-        log_likelihoods = []
+        nlls = []
         for n_idx in range(num_batches):
             batch = int_sample[n_idx * batch_size : (n_idx + 1) * batch_size]
 
@@ -187,18 +191,22 @@ class NeuralSorting(object):
                 nll = self.evaluate_likelihoods(batch_exp, adj_matrix_expanded, var_idx)
                 nll = nll.reshape(graph_count, batch_size, -1)
 
+                assert torch.isnan(nll).sum() == 0, "NaNs in log-likelihoods!"
+
                 if n_idx == 0:
-                    log_likelihoods.append(nll.mean(dim=1))
+                    nlls.append(nll.mean(dim=1))
                 else:
-                    log_likelihoods[c_idx] += nll.mean(dim=1)
+                    nlls[c_idx] += nll.mean(dim=1)
 
         # Combine all data
         # adj_matrices = torch.cat(adj_matrices, dim=0)
-        log_likelihoods = torch.cat(log_likelihoods, dim=0).mean(dim=0)
+        nlls = torch.cat(nlls, dim=0).mean(dim=0)
+        nll_mask = torch.ones_like(nlls)
+        nll_mask[var_idx] = 0.0
+        total_nll = (nlls * nll_mask).sum()
+        sampled_orders = sampled_perm.argmax(dim=-1)
 
-        sampled_order = sampled_perm.argmax(dim=-1)
-
-        return sampled_order, log_likelihoods, var_idx
+        return sampled_orders, total_nll, var_idx
 
     def gumbel_softmax(self, n_samples, scores, tau=1.0, beta=1.0):
         """
@@ -244,13 +252,13 @@ class NeuralSorting(object):
 
         n_batch = scores.size(0)
         n_dim = scores.size(1)
-        ones = torch.ones(n_batch, n_dim, 1, dtype=torch.float, device=scores.device)
+        ones = torch.ones(n_dim, 1, dtype=torch.float, device=scores.device)
 
         A_scores = torch.abs(scores - scores.permute(0, 2, 1))
 
         B = torch.matmul(A_scores, torch.matmul(ones, torch.transpose(ones, 0, 1)))
 
-        scaling = torch.matmul(n_dim + 1 - 2 * (torch.arange(n_dim) + 1)).float()
+        scaling = (n_dim + 1 - 2 * (torch.arange(n_dim) + 1)).float().to(scores.device)
 
         C = torch.matmul(scores, scaling.unsqueeze(0))
 
@@ -277,8 +285,9 @@ class NeuralSorting(object):
 
         return P_hat
 
-    @torch.no_grad()
-    def gradient_estimator(self, sampled_order, log_likelihoods, gamma, var_idx, use_auto_grad=True):
+    def gradient_estimator(
+        self, sampled_order, nll, gamma, var_idx, use_auto_grad=True
+    ):
         """
         Returns the estimated gradients for gamma and theta. It uses the low-variance gradient estimators
         proposed in Section 3.3 of the paper.
@@ -302,17 +311,14 @@ class NeuralSorting(object):
 
         if use_auto_grad:
 
-            log_likelihoods.backward(torch.ones_like(log_likelihoods))
-
-            gamma.grad[var_idx, :] = 0.
-            gamma.grad = gamma.grad.sum(dim=0)
+            nll.backward()
+            assert torch.isnan(gamma.grad).sum() == 0, "NaNs in gamma gradients!"
 
             return gamma.grad
-        
+
         else:
 
             pass
-
 
     def sample_next_var_idx(self):
         """
@@ -347,7 +353,6 @@ class NeuralSorting(object):
 
         return intervention_dict, var_idx
 
-    @torch.no_grad()
     def evaluate_likelihoods(self, int_sample, adj_matrix, var_idx):
         """
         Evaluates the negative log-likelihood of the interventional data batch (int_sample)
