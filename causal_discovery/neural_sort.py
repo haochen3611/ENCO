@@ -362,9 +362,10 @@ class NeuralSorting(object):
         device = self.get_device()
         int_sample = int_sample.to(device)
         adj_matrix = adj_matrix.to(device)
-        # Transpose for mask because adj[i,j] means that i->j
-        mask_adj_matrix = adj_matrix.transpose(1, 2)
-        preds = self.model(int_sample, mask=mask_adj_matrix)
+        ## Transpose for mask because adj[i,j] means that i->j
+        # no need to transpose here
+        adj_matrix = adj_matrix.transpose(1, 2)
+        preds = self.model(int_sample, mask=adj_matrix)
 
         # Evaluate negative log-likelihood of predictions
         if int_sample.dtype == torch.long:
