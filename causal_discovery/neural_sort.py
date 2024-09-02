@@ -176,6 +176,8 @@ class NeuralSorting(object):
         )
         adj_matrix = torch.einsum("bij,bjk->bik", sampled_perm, ones_tril)
 
+        print((sampled_perm[0] > 0.5).int())
+
         # Evaluate log-likelihoods under sampled adjacency matrix and data
         nlls = []
         for n_idx in range(num_batches):
