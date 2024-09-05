@@ -73,11 +73,14 @@ class DistributionFittingNS(object):
         Samples a batch of adjacency matrices that are used for masking the inputs.
         """
         sampled_perm = self.gumbel_softmax(n_samples=batch_size, scores=gamma, tau=tau, beta=beta)
+        row_trans = sampled_perm.transpose(1, 2)
+        col_trans = sampled_perm
         ones_tril = torch.ones(sampled_perm.size(-1), sampled_perm.size(-1), device=sampled_perm.device, dtype=sampled_perm.dtype)
-        ones_tril = torch.tril(ones_tril, 0).unsqueeze(0).expand(sampled_perm.size(0), -1, -1)
-        adj_matrices = torch.einsum("bij,bjk->bik", sampled_perm, ones_tril)
+        ones_tril = torch.tril(ones_tril, -1).unsqueeze(0).expand(sampled_perm.size(0), -1, -1)
+        adj_matrix = torch.matmul(row_trans, torch.matmul(ones_tril, col_trans))
+
         # Mask diagonals
-        return adj_matrices
+        return adj_matrix
 
     def train_step(self, inputs, adj_matrices):
         """
@@ -91,7 +94,7 @@ class DistributionFittingNS(object):
         adj_matrices = adj_matrices.to(device)
         ## Transpose for mask because adj[i,j] means that i->j
         # no need to transpose here
-        # mask_adj_matrices = adj_matrices.transpose(1, 2)
+        # adj_matrices = adj_matrices.transpose(1, 2)
         preds = self.model(inputs, mask=adj_matrices)
 
         if inputs.dtype == torch.long:
@@ -161,3 +164,16 @@ class DistributionFittingNS(object):
             P_hat = (P - P_hat).detach() + P_hat
         
         return P_hat
+    
+    def sparsity_loss(self):
+        
+        l1_norm = None
+        numel = 0
+        for w in self.model.parameters():
+            if l1_norm is None:
+                l1_norm = w.norm(1)
+            else:
+                l1_norm += w.norm(1)
+            numel += w.numel()
+        return (l1_norm / (numel + 1e-20)).clone()
+

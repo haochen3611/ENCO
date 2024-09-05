@@ -11,7 +11,6 @@ from causal_discovery.dist_fitting_ns import DistributionFittingNS
 from causal_discovery.utils import track, find_best_acyclic_graph
 from causal_discovery.multivariable_mlp import create_model
 from causal_discovery.multivariable_flow import create_continuous_model
-from causal_discovery.graph_fitting import GraphFitting
 from causal_discovery.neural_sort import NeuralSorting
 from causal_discovery.datasets import ObservationalCategoricalData
 from causal_discovery.optimizers import AdamTheta, AdamGamma
@@ -200,7 +199,9 @@ class ENCONS(object):
         #     self.gamma, lr=lr_gamma, beta1=betas_gamma[0], beta2=betas_gamma[1]
         # )
         self.gamma_optimizer = torch.optim.Adam(
-            [self.gamma], lr=lr_gamma, betas=betas_gamma, maximize=True
+            [self.gamma], lr=lr_gamma, 
+            # betas=betas_gamma, 
+            # maximize=True
         )
 
     def discover_graph(self, num_epochs=30, stop_early=False):
@@ -242,12 +243,12 @@ class ENCONS(object):
         )
         for _ in t:
             loss = self.distribution_fitting_module.perform_update_step(
-                gamma=self.gamma.data,
+                gamma=self.gamma.data.detach(),
             )
             if hasattr(t, "set_description"):
                 t.set_description("Model update loop, loss: %4.2f" % loss)
 
-    def graph_fitting_step(self, tau=0.1, beta=1.0):
+    def graph_fitting_step(self, tau=0.05, beta=1.0):
         """
         Performs on iteration of graph fitting.
         """

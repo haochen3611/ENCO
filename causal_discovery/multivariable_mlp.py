@@ -139,7 +139,7 @@ class InputMask(nn.Module):
             self.input_mask = input_mask
         self.concat_mask = concat_mask
 
-    def forward(self, x, mask=None, mask_val=0):
+    def forward(self, x, mask=None, mask_val=None):
         """
         Forward pass.
 
@@ -165,7 +165,9 @@ class InputMask(nn.Module):
             mask = mask.reshape((1,)*(len(x.shape)-len(mask.shape)) + mask.shape)
         mask = mask.to(x.dtype)
 
-        if mask_val != 0.0:
+        # print((mask[0].reshape(25, 25)))
+
+        if mask_val is not None:
             x = x * mask + (1 - mask) * mask_val
         else:
             x = x * mask
@@ -294,7 +296,7 @@ class EmbedLayer(nn.Module):
             if self.shortend:
                 x = x % self.num_embeds
             x = self.embedding(x)
-            x = self.input_mask(x, mask=mask[..., None], mask_val=0.0)
+            x = self.input_mask(x, mask=mask[..., None], mask_val=torch.randn_like(x))
 
         if len(x.shape) > 3:
             x = x.sum(dim=-2)

@@ -12,6 +12,10 @@ from causal_graphs.graph_definition import CausalDAG
 from causal_discovery.utils import set_cluster
 from experiments.utils import set_seed, get_basic_parser, test_graph_ns
 
+import torch
+
+torch.autograd.set_detect_anomaly(True)
+
 
 if __name__ == "__main__":
     parser = get_basic_parser()
@@ -69,5 +73,7 @@ if __name__ == "__main__":
             )
         s = '== Testing graph "%s" ==' % graph_name
         print("=" * len(s) + "\n" + s + "\n" + "=" * len(s))
+
+        print(graph.adj_matrix)
         # Start structure learning
         test_graph_ns(graph, args, checkpoint_dir, file_id)

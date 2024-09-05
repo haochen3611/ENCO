@@ -117,9 +117,10 @@ class NeuralSorting(object):
             gamma, self.num_batches, self.num_graphs, self.batch_size, var_idx
         )
 
+        loss = total_nll
         # Determine gradients for gamma
         self.gradient_estimator(
-            sampled_orders, total_nll, gamma, var_idx
+            sampled_orders, loss, gamma, var_idx
         )
 
         return total_nll, var_idx
@@ -165,6 +166,9 @@ class NeuralSorting(object):
         )
         assert torch.isnan(sampled_perm).sum() == 0, "NaNs in sampled permutations!"
 
+        row_trans = sampled_perm.transpose(1, 2)
+        col_trans = sampled_perm
+
         ones_tril = torch.ones(
             sampled_perm.size(-1),
             sampled_perm.size(-1),
@@ -172,11 +176,11 @@ class NeuralSorting(object):
             dtype=sampled_perm.dtype,
         )
         ones_tril = (
-            torch.tril(ones_tril, 0).unsqueeze(0).expand(sampled_perm.size(0), -1, -1)
+            torch.tril(ones_tril, -1).unsqueeze(0).expand(sampled_perm.size(0), -1, -1)
         )
-        adj_matrix = torch.einsum("bij,bjk->bik", sampled_perm, ones_tril)
+        adj_matrix = torch.matmul(row_trans, torch.matmul(ones_tril, col_trans))
 
-        print((sampled_perm[0] > 0.5).int())
+        # print((adj_matrix[0]).int())
 
         # Evaluate log-likelihoods under sampled adjacency matrix and data
         nlls = []
@@ -202,10 +206,12 @@ class NeuralSorting(object):
 
         # Combine all data
         # adj_matrices = torch.cat(adj_matrices, dim=0)
-        nlls = torch.cat(nlls, dim=0).mean(dim=0)
-        nll_mask = torch.ones_like(nlls)
-        nll_mask[var_idx] = 0.0
-        total_nll = (nlls * nll_mask).sum()
+        # nlls = torch.cat(nlls, dim=0).mean(dim=0)
+        # nll_mask = torch.ones_like(nlls)
+        # nll_mask[var_idx] = 0.0
+        # total_nll = (nlls * nll_mask).sum()
+
+        total_nll = torch.cat(nlls, dim=0).mean(dim=0).sum()
         sampled_orders = sampled_perm.argmax(dim=-1)
 
         return sampled_orders, total_nll, var_idx
@@ -288,7 +294,7 @@ class NeuralSorting(object):
         return P_hat
 
     def gradient_estimator(
-        self, sampled_order, nll, gamma, var_idx, use_auto_grad=True
+        self, sampled_order, loss, gamma, var_idx, use_auto_grad=True
     ):
         """
         Returns the estimated gradients for gamma and theta. It uses the low-variance gradient estimators
@@ -313,7 +319,7 @@ class NeuralSorting(object):
 
         if use_auto_grad:
 
-            nll.backward()
+            loss.backward()
             assert torch.isnan(gamma.grad).sum() == 0, "NaNs in gamma gradients!"
 
             return gamma.grad
@@ -366,7 +372,9 @@ class NeuralSorting(object):
         adj_matrix = adj_matrix.to(device)
         ## Transpose for mask because adj[i,j] means that i->j
         # no need to transpose here
-        adj_matrix = adj_matrix.transpose(1, 2)
+        # adj_matrix = adj_matrix.transpose(1, 2)
+        # print(adj_matrix[0])
+
         preds = self.model(int_sample, mask=adj_matrix)
 
         # Evaluate negative log-likelihood of predictions
@@ -387,3 +395,16 @@ class NeuralSorting(object):
 
     def get_device(self):
         return self.model.device
+
+    def sparsity_loss(self):
+        self.model.eval()
+        l1_norm = None
+        numel = 0
+        for w in self.model.parameters():
+            if l1_norm is None:
+                l1_norm = w.norm(1)
+            else:
+                l1_norm += w.norm(1)
+            numel += w.numel()
+        self.model.train()
+        return (l1_norm / (numel + 1e-20)).clone()
